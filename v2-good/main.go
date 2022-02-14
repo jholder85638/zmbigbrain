@@ -59,7 +59,7 @@ func main() {
 	//	server1DataSet:      cmap.New(),
 	//	server2DataSet:      cmap.New(),
 	//}
-	
+
 	//You MUST add each causal permutation as an object. A delta both ways between the servers will be checked.
 	//So if I have Masters holder-ldap-1, holder-ldap-2, holder-ldap-3, then I would create an LDIFMasterObjectRoster for
 	//server1 = holder-ldap-1 server2 = holder-ldap-2
@@ -73,66 +73,69 @@ func main() {
 		counter++
 		log.Println("(Phase 1, Stage " + strconv.Itoa(counter) + "/" + strconv.Itoa(totalLen) + ") Comparing LDAP Exports of " + v.server1FriendlyName + " against " + v.server2FriendlyName)
 		log.Println("Reading " + v.server1FriendlyName + " into memory")
-		b, err := ioutil.ReadFile(`C:\Users\John Holder\Desktop\ldap\` + v.server1File) // just pass the file name
+		b, err := ioutil.ReadFile(v.server1File) // just pass the file name
 		if err != nil {
-			fmt.Print(err)
+			log.Fatal(err)
 		}
 		server1, err := ldif.Parse(string(b), true)
 		if err != nil {
-			log.Printf("Failed to parse RFC 2849 example: %s", err)
+			log.Fatalf("Failed to parse RFC 2849 example: %s", err)
 		}
 
 		log.Println("Reading " + v.server2FriendlyName + " into memory")
-		b, err = ioutil.ReadFile(`C:\Users\John Holder\Desktop\ldap\` + v.server2File) // just pass the file name
+		b, err = ioutil.ReadFile(v.server2File) // just pass the file name
 		if err != nil {
-			fmt.Print(err)
+			log.Fatal(err)
 		}
 		server2, err := ldif.Parse(string(b), true)
 		if err != nil {
-			log.Printf("Failed to parse RFC 2849 example: %s", err)
+			log.Fatalf("Failed to parse RFC 2849 example: %s", err)
 		}
 		//var TimerStarted = false
 		var wg sync.WaitGroup
 		S1Chunks := chunkSlice(server1.AllEntries(), 43435)
 		for k, thisLDAPChunk := range S1Chunks {
-			fmt.Println("Main: Starting worker", k)
+			log.Println("[zmbigbrain - worker_info] Starting worker", k)
 			wg.Add(1)
-			go worker(&wg, k, thisLDAPChunk, server2)
+			go worker(&wg, k, thisLDAPChunk, server2, v.server1FriendlyName, v.server1FriendlyName)
 		}
-		fmt.Println("Main: waiting for comparison between Server " + v.server1FriendlyName + " and " + v.server2FriendlyName + " to complete.")
+		log.Println("[zmbigbrain - worker_info] Waiting for comparison between Server " + v.server1FriendlyName + " and " + v.server2FriendlyName + " to complete.")
 		wg.Wait()
-		fmt.Println("Main: Starting comparison between Server " + v.server2FriendlyName + " and " + v.server1FriendlyName + ".")
+		log.Println("[zmbigbrain - worker_info] Waiting comparison between Server " + v.server2FriendlyName + " and " + v.server1FriendlyName + ".")
 
 		S2Chunks := chunkSlice(server2.AllEntries(), 43435)
 		for k, thisLDAPChunk := range S2Chunks {
-			fmt.Println("Main: Starting worker", k)
+			log.Println("[zmbigbrain - worker_info] Starting worker", k)
 			wg.Add(1)
-			go worker(&wg, k, thisLDAPChunk, server1)
+			go worker(&wg, k, thisLDAPChunk, server1, v.server2FriendlyName, v.server1FriendlyName)
 		}
-		fmt.Println("Main: waiting for comparison between Server " + v.server2FriendlyName + " and " + v.server1FriendlyName + " to complete.")
+		log.Println("[zmbigbrain - worker_info] Waiting for worker threads to finish between Server " + v.server2FriendlyName + " and " + v.server1FriendlyName + " to complete.")
 		wg.Wait()
-		fmt.Println("Main: Completed")
+		log.Println("[zmbigbrain - worker_info] All worker threads finished.")
 	}
 	log.Println("Starting Phase 2: Conflict Resolution.")
 	fmt.Println("Done")
 
 }
-func worker(wg *sync.WaitGroup, id int, S1Object []*v3.Entry, S2Object *ldif.LDIF) {
+func worker(wg *sync.WaitGroup, id int, S1Object []*v3.Entry, S2Object *ldif.LDIF,
+	ServerOnePrettyName string, ServerTwoPrettyName string) {
 	defer wg.Done()
 
-	fmt.Printf("Worker %v: Started\n", id)
-	CheckForObject(S1Object, S2Object)
-	fmt.Printf("Worker %v: Finished\n", id)
+	log.Printf("[zmbigbrain - worker_info] Worker %v: Started\n", id)
+	CheckForObject(S1Object, S2Object, ServerOnePrettyName, ServerTwoPrettyName)
+	log.Printf("[zmbigbrain - worker_info] Worker %v: Finished\n", id)
 }
 
 var IncorrectValuesMap = cmap.New()
 
-func CheckForObject(S1Objects []*v3.Entry, S2Object *ldif.LDIF) (bool, []*v3.EntryAttribute) {
-
+func CheckForObject(S1Objects []*v3.Entry,
+	S2Object *ldif.LDIF,
+	ServerOnePrettyName string, ServerTwoPrettyName string) (bool, []*v3.EntryAttribute) {
+	//missingAttribtues := []string{}
 	for _, Server1Object := range S1Objects {
 		found, S2Entry := S2Object.GetAttributesByDN(Server1Object.DN)
 		if !found {
-			fmt.Println("Can't find " + Server1Object.DN + " in Server 2")
+			log.Println("[zmbigbrain - status_info] Can't find " + Server1Object.DN + " in Server 2")
 			os.Exit(1)
 		}
 		DidFindAttibute := false
@@ -144,13 +147,22 @@ func CheckForObject(S1Objects []*v3.Entry, S2Object *ldif.LDIF) (bool, []*v3.Ent
 				}
 				DidFindAttibute = true
 				if !reflect.DeepEqual(Server1Attribute.Values, Server2Attributes.Values) {
-					fmt.Println(ThisAttribute)
-					fmt.Println(pretty.Compare(Server1Attribute.Values, Server2Attributes.Values))
-					log.Println(Server1Object.DN + " doesn't have the same values as Server 2.")
-					log.Println("Did Find Attribute")
-					fmt.Println(DidFindAttibute)
+					currentDN := Server1Object.DN
+					if currentDN == "" {
+						//This is the base dn, with on value for the key.
+						currentDN = "BaseDN: dn: (probably glue)"
+					}
+					if DidFindAttibute {
+						diff := pretty.Sprint(Server1Attribute.Values, Server2Attributes.Values)
+						log.Println("[zmbigbrain - status_info] Between " + ServerOnePrettyName + " and " + ServerTwoPrettyName + ":\nAttribute difference for " + currentDN + " => " + ThisAttribute + "\n" + diff)
+						//fmt.Println(pretty.Compare(Server1Attribute.Values, Server2Attributes.Values))
+					}
 				}
 			}
+		}
+		if !DidFindAttibute {
+			//missingAttribtues
+			//log.Println(currentDN + " => "+ThisAttribute+" doesn't have the same values as Server 2.")
 		}
 	}
 
